@@ -1,0 +1,326 @@
+{
+  "schemaVersion": 1,
+  "tool": {
+    "name": "ProVerif",
+    "version": "2.05",
+    "sourceArchiveSha256": "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4"
+  },
+  "models": [
+    {
+      "id": "auth-binding",
+      "path": "protocol-v2-auth-binding.pv",
+      "kind": "positive-security",
+      "timeoutSec": 120,
+      "properties": [
+        {
+          "id": "AUTH-P1-CREDENTIAL",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(CredentialRegistered(c))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P2-POLICY",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(PolicyRegistered(p))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P3-SESSION",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(SessionIssued(s))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P4-MEASUREMENT",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(MeasurementAttested(e))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P5-PAYER-INTENT",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(PayerIntentAuthorized(i))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P6-DEVICE-ORIGIN",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(DeviceTransactionAuthorized(t))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P7-CREDENTIAL-POSSESSION",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> event(CredentialPossessionProved(o))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-P8-INJECTIVE-SESSION",
+          "queryPrefix": "RESULT inj-event(AuthorizationAccepted(o,s,c,p,e,i,t)) ==> inj-event(SessionIssued(s))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "AUTH-S1-CREDENTIAL-SECRET",
+          "queryPrefix": "RESULT not attacker_bitstring(credentialSecret",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "AUTH-S2-DEVICE-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skDevice",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "AUTH-S3-PAYER-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skPayer",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "AUTH-S4-ATTESTOR-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skAttestor",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        }
+      ]
+    },
+    {
+      "id": "settlement",
+      "path": "protocol-v2-settlement.pv",
+      "kind": "positive-security-and-reachability",
+      "timeoutSec": 120,
+      "requireTrace": true,
+      "properties": [
+        {
+          "id": "SET-P1-SOURCE",
+          "queryPrefix": "RESULT event(PaymentSettled(o,i,c)) ==> event(AuthorizationAcceptedOrder(o))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "SET-P2-PAYER-INTENT",
+          "queryPrefix": "RESULT event(PaymentSettled(o,i,c)) ==> event(PayerIntentAuthorized(i))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "SET-P3-OBSERVER-QUORUM",
+          "queryPrefix": "RESULT event(PaymentSettled(o,i,c)) ==> (event(ObserverAttested",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "SET-P4-INJECTIVE-SINGLE-USE",
+          "queryPrefix": "RESULT inj-event(PaymentSettledOrder(o)) ==> inj-event(AuthorizationAcceptedOrder(o))",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "SET-S1-PAYER-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skPayer",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "SET-S2-OBSERVER1-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skObserver1",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "SET-S3-OBSERVER2-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skObserver2",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "SET-S4-OBSERVER3-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skObserver3",
+          "expected": "TRUE",
+          "classification": "secrecy"
+        },
+        {
+          "id": "SET-R1-HONEST-REACHABLE",
+          "queryPrefix": "RESULT not event(HonestSettlementCompleted(o))",
+          "expected": "FALSE",
+          "classification": "reachability-expected-false"
+        }
+      ]
+    },
+    {
+      "id": "compromise",
+      "path": "protocol-v2-compromise.pv",
+      "kind": "positive-security",
+      "timeoutSec": 120,
+      "properties": [
+        {
+          "id": "COMP-P1-ATTESTOR",
+          "queryRegex": "^RESULT event\\(AuthorizationAccepted\\([^)]*\\)\\) ==> event\\(MeasurementAttested\\([^)]*\\)\\) \\|\\| event\\(AttestorCorrupted",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "COMP-P2-PAYER",
+          "queryRegex": "^RESULT event\\(AuthorizationAccepted\\([^)]*\\)\\) ==> event\\(PayerIntentAuthorized\\([^)]*\\)\\) \\|\\| event\\(PayerCorrupted",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "COMP-P3-DEVICE",
+          "queryRegex": "^RESULT event\\(AuthorizationAccepted\\([^)]*\\)\\) ==> event\\(DeviceTransactionAuthorized\\([^)]*\\)\\) \\|\\| event\\(DeviceCorrupted",
+          "expected": "TRUE",
+          "classification": "security"
+        },
+        {
+          "id": "COMP-S1-CREDENTIAL-SECRET",
+          "queryPrefix": "RESULT attacker_bitstring(credentialSecret",
+          "expected": "TRUE",
+          "classification": "compromise-aware-secrecy"
+        },
+        {
+          "id": "COMP-S2-DEVICE-KEY",
+          "queryPrefix": "RESULT attacker_skey(skDevice",
+          "expected": "TRUE",
+          "classification": "compromise-aware-secrecy"
+        },
+        {
+          "id": "COMP-S3-PAYER-KEY",
+          "queryPrefix": "RESULT attacker_skey(skPayer",
+          "expected": "TRUE",
+          "classification": "compromise-aware-secrecy"
+        },
+        {
+          "id": "COMP-S4-ATTESTOR-KEY",
+          "queryPrefix": "RESULT attacker_skey(skAttestor",
+          "expected": "TRUE",
+          "classification": "compromise-aware-secrecy"
+        }
+      ]
+    },
+    {
+      "id": "auth-reachability",
+      "path": "protocol-v2-auth-reachability.pv",
+      "kind": "reachability",
+      "timeoutSec": 120,
+      "requireTrace": true,
+      "properties": [
+        {
+          "id": "AUTH-R1-HONEST-REACHABLE",
+          "queryPrefix": "RESULT not event(HonestAuthorizationCompleted(o))",
+          "expected": "FALSE",
+          "classification": "reachability-expected-false"
+        }
+      ]
+    },
+    {
+      "id": "mutant-device-origin-bypass",
+      "path": "mutants/protocol-v2-device-origin-bypass.pv",
+      "kind": "expected-failing-mutant",
+      "timeoutSec": 120,
+      "requireTrace": true,
+      "properties": [
+        {
+          "id": "MUT-D1-CALLER-SUBSTITUTION",
+          "queryPrefix": "RESULT event(AuthorizationAccepted(caller,t)) ==> event(DeviceOriginAuthorized(caller,t))",
+          "expected": "FALSE",
+          "classification": "mutant-expected-false"
+        }
+      ]
+    },
+    {
+      "id": "mutant-policy-version-unbound",
+      "path": "mutants/protocol-v2-policy-version-unbound.pv",
+      "kind": "expected-failing-mutant",
+      "timeoutSec": 120,
+      "requireTrace": true,
+      "properties": [
+        {
+          "id": "MUT-P1-POLICY-VERSION",
+          "queryPrefix": "RESULT event(PolicyAccepted(id,v)) ==> event(PolicyRegistered(id,v))",
+          "expected": "FALSE",
+          "classification": "mutant-expected-false"
+        }
+      ]
+    },
+    {
+      "id": "mutant-payer-provider-unbound",
+      "path": "mutants/protocol-v2-payer-provider-unbound.pv",
+      "kind": "expected-failing-mutant",
+      "timeoutSec": 120,
+      "requireTrace": true,
+      "properties": [
+        {
+          "id": "MUT-C1-PROVIDER-SUBSTITUTION",
+          "queryRegex": "^RESULT event\\(AuthorizationAccepted\\(provider,intent(?:_[0-9]+)?\\)\\) ==> event\\(PayerIntentAuthorized\\(provider,intent(?:_[0-9]+)?\\)\\)",
+          "expected": "FALSE",
+          "classification": "mutant-expected-false"
+        }
+      ]
+    },
+    {
+      "id": "mutant-settlement-unkeyed-consume",
+      "path": "mutants/protocol-v2-settlement-unkeyed-consume.pv",
+      "kind": "expected-failing-mutant",
+      "timeoutSec": 120,
+      "requireTrace": true,
+      "properties": [
+        {
+          "id": "MUT-S-CONTROL-SOURCE",
+          "queryPrefix": "RESULT event(PaymentSettled(o,i,c)) ==> event(AuthorizationAcceptedOrder(o))",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S-CONTROL-PAYER",
+          "queryPrefix": "RESULT event(PaymentSettled(o,i,c)) ==> event(PayerIntentAuthorized(i))",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S-CONTROL-QUORUM",
+          "queryPrefix": "RESULT event(PaymentSettled(o,i,c)) ==> (event(ObserverAttested",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S1-UNKEYED-CONSUME",
+          "queryPrefix": "RESULT inj-event(PaymentSettledOrder(o)) ==> inj-event(AuthorizationAcceptedOrder(o))",
+          "expected": "FALSE",
+          "classification": "mutant-expected-false"
+        },
+        {
+          "id": "MUT-S-CONTROL-PAYER-KEY",
+          "queryPrefix": "RESULT not attacker_skey(skPayer",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S-CONTROL-OBSERVER1",
+          "queryPrefix": "RESULT not attacker_skey(skObserver1",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S-CONTROL-OBSERVER2",
+          "queryPrefix": "RESULT not attacker_skey(skObserver2",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S-CONTROL-OBSERVER3",
+          "queryPrefix": "RESULT not attacker_skey(skObserver3",
+          "expected": "TRUE",
+          "classification": "mutant-control"
+        },
+        {
+          "id": "MUT-S-R1-HONEST-REACHABLE",
+          "queryPrefix": "RESULT not event(HonestSettlementCompleted(o))",
+          "expected": "FALSE",
+          "classification": "mutant-reachability"
+        }
+      ]
+    }
+  ]
+}

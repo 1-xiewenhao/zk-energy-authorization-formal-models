@@ -1,0 +1,86 @@
+theory IOTJ_V2_Settlement_Missing_Order_Recompute_Mutant
+begin
+
+builtins: hashing
+functions: eventid/4, orderhash/11, payerintent/7
+
+restriction Distinct_Observer_Signers:
+  "All x #i. NotEqual(x,x)@i ==> F"
+
+/*
+  EXPECTED-FAILING NEGATIVE MUTANT.
+  SignedPayerIntent preserves the valid ctx/provider/token/amount/expiry tuple.
+  Mutant_Register_Order deliberately accepts fresh replacement values for
+  orderHash, session, nullifier, rate, and policyVersion because it omits both
+  full PreparedOrder matching and eventId/orderHash recomputation. The detailed
+  positive settlement model separately proves certificate authenticity, quorum,
+  and at-most-once controls; the two direct distinct-certificate facts here keep
+  this deletion witness finite and isolate only the missing binding check.
+*/
+
+rule Payer_Prepare_Order:
+  let eventId = eventid(~sys,~session,~ctx,~nullifier)
+      orderHash = orderhash(~sys,eventId,~ctx,~payer,~provider,~token,
+                            ~provider,~amount,~rate,~policyVersion,~expiry)
+      intent = payerintent(~sys,~ctx,~payer,~provider,~token,~amount,~expiry)
+  in
+  [ Fr(~sys), Fr(~ctx), Fr(~session), Fr(~nullifier), Fr(~payer),
+    Fr(~provider), Fr(~token), Fr(~amount), Fr(~rate),
+    Fr(~policyVersion), Fr(~expiry) ]
+  --[ PayerOrderPrepared(~sys,orderHash,eventId,~ctx,~session,~nullifier,
+                         ~payer,~provider,~token,~provider,~amount,~rate,
+                         ~policyVersion,~expiry) ]->
+  [ PendingRegistration(~sys,eventId,~ctx),
+    !SignedPayerIntent(~sys,intent,~ctx,~payer,~provider,~token,~amount,~expiry) ]
+
+rule Mutant_Register_Order:
+  let intent = payerintent(sys,ctx,payer,provider,token,amount,expiry)
+  in
+  [ PendingRegistration(sys,eventId,ctx),
+    !SignedPayerIntent(sys,intent,ctx,payer,provider,token,amount,expiry),
+    Fr(~replacementOrderHash), Fr(~replacementSession),
+    Fr(~replacementNullifier), Fr(~replacementRate),
+    Fr(~replacementPolicyVersion), Fr(~observerA), Fr(~observerB) ]
+  --[ PaymentOrderRegistered(sys,~replacementOrderHash,eventId,ctx,
+                             ~replacementSession,~replacementNullifier,
+                             payer,provider,token,provider,amount,
+                             ~replacementRate,~replacementPolicyVersion,
+                             expiry) ]->
+  [ ReadyToSettle(sys,~replacementOrderHash,eventId,ctx,
+                  ~replacementSession,~replacementNullifier,payer,provider,
+                  token,provider,amount,~replacementRate,
+                  ~replacementPolicyVersion,expiry),
+    DirectCertificate(sys,~replacementOrderHash,eventId,ctx,~observerA),
+    DirectCertificate(sys,~replacementOrderHash,eventId,ctx,~observerB) ]
+
+rule Settle_Mutant_Order:
+  [ ReadyToSettle(sys,orderHash,eventId,ctx,session,nullifier,payer,provider,
+                  token,payee,amount,rate,policyVersion,expiry),
+    DirectCertificate(sys,orderHash,eventId,ctx,observerA),
+    DirectCertificate(sys,orderHash,eventId,ctx,observerB) ]
+  --[ NotEqual(observerA,observerB),
+      SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,payer,
+                         provider,token,payee,amount,rate,policyVersion,
+                         expiry) ]->
+  [ Settled(sys,eventId,ctx) ]
+
+lemma executable_settlement:
+  exists-trace
+  "Ex sys orderHash eventId ctx session nullifier payer provider token payee
+      amount rate policyVersion expiry #i.
+     SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,payer,
+                        provider,token,payee,amount,rate,policyVersion,
+                        expiry)@i"
+
+lemma exact_payment_context_binding:
+  "All sys orderHash eventId ctx session nullifier payer provider token payee
+       amount rate policyVersion expiry #i.
+     SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,payer,
+                        provider,token,payee,amount,rate,policyVersion,
+                        expiry)@i
+     ==> (Ex #p.
+            PayerOrderPrepared(sys,orderHash,eventId,ctx,session,nullifier,
+                               payer,provider,token,payee,amount,rate,
+                               policyVersion,expiry)@p & #p < #i)"
+
+end

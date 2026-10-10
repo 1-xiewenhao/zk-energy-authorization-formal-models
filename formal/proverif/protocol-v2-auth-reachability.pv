@@ -1,0 +1,109 @@
+(* Protocol v2 bounded honest-trace witness for ProVerif 2.05.
+   This file is not a security proof. Its sole expected result is
+   "not event(HonestAuthorizationCompleted(...)) is false", demonstrating
+   that the exact signature/ZK/context construction used by the security
+   module has a concrete successful execution. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+
+free protocolVersion,sourceChainId,authorizationContract:bitstring.
+free paymentChainId,settlementContract:bitstring.
+free credentialId,credentialVersion,credentialDigest:bitstring.
+free policyId,policyVersion,policyDigest:bitstring.
+free energyRequest_mWh,rateAtomicPerMWh,tokenAddress:bitstring.
+free hOut,sampledAt,sampleCounter,expiry:bitstring.
+free skDevice,skPayer,skProvider,skAttestor:skey [private].
+free credentialSecret:bitstring [private].
+const ok:bitstring.
+
+fun pk(skey):pkey.
+fun sign(bitstring,skey):bitstring.
+fun checksign(bitstring,pkey):bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+fun h(bitstring):bitstring.
+fun zkProof(bitstring,bitstring,bitstring):bitstring.
+fun verifyZk(bitstring,bitstring,bitstring):bitstring
+reduc forall w:bitstring,credSec:bitstring,s:bitstring;
+  verifyZk(zkProof(w,credSec,s),s,h(credSec)) = ok.
+
+fun measurementEnvelope(
+  bitstring,bitstring,bitstring,bitstring,bitstring,pkey,
+  bitstring,bitstring,bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun contextCore(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,pkey,pkey,pkey,
+  bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun payerIntent(bitstring,pkey,pkey,bitstring,bitstring,bitstring,bitstring,bitstring):
+  bitstring [data].
+fun zkWitness(bitstring,bitstring,bitstring,bitstring,bitstring):bitstring [data].
+fun zkStatement(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun sessionRecord(
+  bitstring,bitstring,bitstring,bitstring,pkey,pkey,
+  bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun txDigest(bitstring,bitstring,bitstring,bitstring,bitstring):bitstring [data].
+fun eventCore(bitstring,bitstring,bitstring,bitstring,bitstring):bitstring [data].
+fun settlementOrder(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,pkey,pkey,pkey,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+
+event HonestAuthorizationCompleted(bitstring).
+query o:bitstring; event(HonestAuthorizationCompleted(o)).
+
+process
+  new sessionId:bitstring;
+  new nullifier:bitstring;
+  new x:bitstring;
+  new y:bitstring;
+  new currentEnergy:bitstring;
+  new blinding:bitstring;
+  let session = sessionRecord(sessionId,credentialId,credentialVersion,
+        credentialDigest,pk(skDevice),pk(skPayer),policyId,policyVersion,
+        energyRequest_mWh,expiry) in
+  let env = measurementEnvelope(protocolVersion,sourceChainId,
+        authorizationContract,credentialId,credentialDigest,pk(skDevice),
+        policyDigest,sessionId,hOut,sampledAt,sampleCounter,expiry) in
+  let (=env) = checksign(sign(env,skAttestor),pk(skAttestor)) in
+  let amount = h((energyRequest_mWh,rateAtomicPerMWh)) in
+  let ctxHash = h(contextCore(protocolVersion,sourceChainId,
+        authorizationContract,paymentChainId,settlementContract,
+        credentialId,credentialVersion,credentialDigest,sessionId,
+        pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+        energyRequest_mWh,rateAtomicPerMWh,amount,
+        policyId,policyVersion,policyDigest,hOut,sampledAt,sampleCounter,expiry)) in
+  let intent = payerIntent(ctxHash,pk(skPayer),pk(skProvider),tokenAddress,
+        amount,expiry,sourceChainId,authorizationContract) in
+  let (=intent) = checksign(sign(intent,skPayer),pk(skPayer)) in
+  let witness = zkWitness(x,y,currentEnergy,credentialSecret,blinding) in
+  let statement = zkStatement(policyId,policyVersion,credentialId,
+        credentialVersion,energyRequest_mWh,sessionId,hOut,
+        h(credentialSecret),ctxHash,nullifier) in
+  let zkp = zkProof(witness,credentialSecret,statement) in
+  let (=ok) = verifyZk(zkp,statement,h(credentialSecret)) in
+  let txd = txDigest(session,env,intent,nullifier,zkp) in
+  let (=txd) = checksign(sign(txd,skDevice),pk(skDevice)) in
+  let eventId = h(eventCore(sourceChainId,authorizationContract,
+                            sessionId,ctxHash,nullifier)) in
+  let order = settlementOrder(protocolVersion,sourceChainId,
+        authorizationContract,paymentChainId,settlementContract,
+        eventId,ctxHash,credentialId,credentialVersion,credentialDigest,
+        sessionId,nullifier,pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+        energyRequest_mWh,rateAtomicPerMWh,amount,
+        policyId,policyVersion,policyDigest,hOut,sampledAt,sampleCounter,expiry) in
+  event HonestAuthorizationCompleted(order)

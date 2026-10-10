@@ -1,0 +1,65 @@
+(* EXPECTED-FAILING MUTANT: provider is omitted from both ctxHash and the
+   payer-signed intent. Both candidate providers may be otherwise registered;
+   the payer's authorization for providerA can therefore be replayed as an
+   authorization for providerB.
+
+   Implementation guard restored in Protocol v2:
+   - AuthorizationContext includes provider and policyDigest.
+   - PayerIntent includes ctxHash and provider.
+   - Both ledgers recompute ctxHash and compare payerIntent.provider.
+
+   Expected result: AuthorizationAccepted ==> PayerIntentAuthorized is false. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+free net:channel.
+
+free payer,providerA,providerB,token:bitstring.
+free amountAtomic,expiry,sourceChainId,authorizationContract:bitstring.
+free sessionId,policyId:bitstring.
+free skPayer:skey [private].
+
+fun pk(skey):pkey.
+fun sign(bitstring,skey):bitstring.
+fun checksign(bitstring,pkey):bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+fun h(bitstring):bitstring.
+
+(* Mutation: provider and policyDigest are intentionally absent. *)
+fun contextWithoutProvider(bitstring,bitstring,bitstring,bitstring):bitstring [data].
+fun payerIntentWithoutProvider(
+  bitstring,bitstring,bitstring,bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+
+event ProviderPolicyRegistered(bitstring).
+event PayerIntentAuthorized(bitstring,bitstring).
+event AuthorizationAccepted(bitstring,bitstring).
+
+query provider,intent:bitstring;
+  event(AuthorizationAccepted(provider,intent))
+  ==> event(PayerIntentAuthorized(provider,intent)).
+
+let MutantVerifier() =
+  !in(net,(claimedProvider:bitstring,intent:bitstring,sig:bitstring));
+   let ctxHash = h(contextWithoutProvider(sessionId,policyId,token,amountAtomic)) in
+   let expectedIntent = payerIntentWithoutProvider(ctxHash,payer,token,
+         amountAtomic,expiry,sourceChainId,authorizationContract) in
+   let (=expectedIntent) = checksign(sig,pk(skPayer)) in
+   if intent = expectedIntent then
+   if claimedProvider = providerA then
+     event AuthorizationAccepted(claimedProvider,intent)
+   else if claimedProvider = providerB then
+     event AuthorizationAccepted(claimedProvider,intent).
+
+process
+  let ctxHash = h(contextWithoutProvider(sessionId,policyId,token,amountAtomic)) in
+  let intent = payerIntentWithoutProvider(ctxHash,payer,token,
+        amountAtomic,expiry,sourceChainId,authorizationContract) in
+  event ProviderPolicyRegistered(providerA);
+  event ProviderPolicyRegistered(providerB);
+  event PayerIntentAuthorized(providerA,intent);
+  out(net,(intent,sign(intent,skPayer)));
+  MutantVerifier()

@@ -1,0 +1,189 @@
+(* Protocol v2 -- ProVerif 2.05 relay/settlement correspondence module.
+   This module is a message-layer cross-check. The private one-shot settlement
+   process represents the Solidity pair of guards settled[eventId] and
+   consumedContextHash[ctxHash]; Tamarin remains the primary proof of the
+   persistent state machine. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+free net: channel.
+
+free protocolVersion,sourceChainId,authorizationContract:bitstring.
+free paymentChainId,settlementContract:bitstring.
+free credentialId,credentialVersion,credentialDigest:bitstring.
+free policyId,policyVersion,policyDigest:bitstring.
+free energyRequest_mWh,rateAtomicPerMWh,tokenAddress:bitstring.
+free hOut,sampledAt,sampleCounter,expiry:bitstring.
+free relaySetEpoch:bitstring.
+free observerId1,observerId2,observerId3:bitstring.
+
+free skDevice,skPayer,skProvider,skAuthorization:skey [private].
+free skObserver1,skObserver2,skObserver3:skey [private].
+
+fun pk(skey):pkey.
+fun sign(bitstring,skey):bitstring.
+fun checksign(bitstring,pkey):bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+fun h(bitstring):bitstring.
+
+fun verifyQuorum2(bitstring,bitstring,pkey,pkey,pkey):bitstring
+reduc forall c:bitstring,k1:skey,k2:skey,k3:skey;
+  verifyQuorum2(sign(c,k1),sign(c,k2),pk(k1),pk(k2),pk(k3)) = c
+otherwise forall c:bitstring,k1:skey,k2:skey,k3:skey;
+  verifyQuorum2(sign(c,k1),sign(c,k3),pk(k1),pk(k2),pk(k3)) = c
+otherwise forall c:bitstring,k1:skey,k2:skey,k3:skey;
+  verifyQuorum2(sign(c,k2),sign(c,k3),pk(k1),pk(k2),pk(k3)) = c.
+
+fun contextCore(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,pkey,pkey,pkey,
+  bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun eventCore(bitstring,bitstring,bitstring,bitstring,bitstring):bitstring [data].
+fun payerIntent(bitstring,pkey,pkey,bitstring,bitstring,bitstring,bitstring,bitstring):
+  bitstring [data].
+fun settlementOrder(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,pkey,pkey,pkey,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun orderCore(bitstring,bitstring):bitstring [data].
+fun relayCertificate(
+  bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+fun finalizedAuthorization(
+  bitstring,bitstring,bitstring,bitstring,bitstring
+):bitstring [data].
+
+event AuthorizationAcceptedOrder(bitstring).
+event PayerIntentAuthorized(bitstring).
+event ObserverAttested(bitstring,bitstring).
+event PaymentSettled(bitstring,bitstring,bitstring).
+event PaymentSettledOrder(bitstring).
+event HonestSettlementCompleted(bitstring).
+
+query o,i,c:bitstring;
+  event(PaymentSettled(o,i,c)) ==> event(AuthorizationAcceptedOrder(o)).
+query o,i,c:bitstring;
+  event(PaymentSettled(o,i,c)) ==> event(PayerIntentAuthorized(i)).
+query o,i,c:bitstring;
+  event(PaymentSettled(o,i,c))
+  ==> (event(ObserverAttested(observerId1,c)) &&
+       event(ObserverAttested(observerId2,c)))
+      || (event(ObserverAttested(observerId1,c)) &&
+          event(ObserverAttested(observerId3,c)))
+      || (event(ObserverAttested(observerId2,c)) &&
+          event(ObserverAttested(observerId3,c))).
+query o:bitstring;
+  inj-event(PaymentSettledOrder(o)) ==> inj-event(AuthorizationAcceptedOrder(o)).
+query attacker(skPayer).
+query attacker(skObserver1).
+query attacker(skObserver2).
+query attacker(skObserver3).
+query o:bitstring; event(HonestSettlementCompleted(o)).
+
+let Observer(obsId:bitstring,obsSk:skey) =
+  !in(net,(chainEnvelope:bitstring,chainSig:bitstring));
+   let finalizedAuthorization(order:bitstring,
+         sourceBlockNumber:bitstring,sourceBlockHash:bitstring,
+         sourceTransactionHash:bitstring,sourceLogIndex:bitstring) =
+       checksign(chainSig,pk(skAuthorization)) in
+   let settlementOrder(=protocolVersion,=sourceChainId,
+         =authorizationContract,=paymentChainId,=settlementContract,
+         eventId:bitstring,ctxHash:bitstring,
+         credId:bitstring,credVer:bitstring,credDig:bitstring,
+         sessionId:bitstring,nullifier:bitstring,
+         mea:pkey,payer:pkey,provider:pkey,token:bitstring,
+         eReq:bitstring,rate:bitstring,amount:bitstring,
+         polId:bitstring,polVer:bitstring,polDig:bitstring,
+         measurementHash:bitstring,sampleTime:bitstring,
+         counter:bitstring,validUntil:bitstring) = order in
+   let cert = relayCertificate(h(orderCore(order,settlementContract)),
+         eventId,ctxHash,relaySetEpoch,sourceBlockNumber,sourceBlockHash,
+         sourceTransactionHash,sourceLogIndex) in
+   event ObserverAttested(obsId,cert);
+   out(net,(cert,sign(cert,obsSk))).
+
+let SettlementAttempt(expectedOrder:bitstring) =
+  in(net,(=expectedOrder,payerSig:bitstring,cert:bitstring,
+          observerSigA:bitstring,observerSigB:bitstring));
+  let settlementOrder(=protocolVersion,=sourceChainId,
+        =authorizationContract,=paymentChainId,=settlementContract,
+        eventId:bitstring,ctxHash:bitstring,
+        =credentialId,=credentialVersion,=credentialDigest,
+        sessionId:bitstring,nullifier:bitstring,
+        =pk(skDevice),=pk(skPayer),=pk(skProvider),=tokenAddress,
+        =energyRequest_mWh,=rateAtomicPerMWh,amount:bitstring,
+        =policyId,=policyVersion,=policyDigest,
+        =hOut,=sampledAt,=sampleCounter,=expiry) = expectedOrder in
+  if amount = h((energyRequest_mWh,rateAtomicPerMWh)) then
+  if ctxHash = h(contextCore(protocolVersion,sourceChainId,
+        authorizationContract,paymentChainId,settlementContract,
+        credentialId,credentialVersion,credentialDigest,sessionId,
+        pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+        energyRequest_mWh,rateAtomicPerMWh,amount,
+        policyId,policyVersion,policyDigest,hOut,sampledAt,sampleCounter,expiry)) then
+  if eventId = h(eventCore(sourceChainId,authorizationContract,
+                           sessionId,ctxHash,nullifier)) then
+  let expectedIntent = payerIntent(ctxHash,pk(skPayer),pk(skProvider),
+        tokenAddress,amount,expiry,sourceChainId,authorizationContract) in
+  let (=expectedIntent) = checksign(payerSig,pk(skPayer)) in
+  let (=cert) = verifyQuorum2(observerSigA,observerSigB,
+        pk(skObserver1),pk(skObserver2),pk(skObserver3)) in
+  let relayCertificate(=h(orderCore(expectedOrder,settlementContract)),
+        =eventId,=ctxHash,=relaySetEpoch,
+        sourceBlockNumber:bitstring,sourceBlockHash:bitstring,
+        sourceTransactionHash:bitstring,sourceLogIndex:bitstring) = cert in
+  event PaymentSettled(expectedOrder,expectedIntent,cert);
+  event PaymentSettledOrder(expectedOrder);
+  event HonestSettlementCompleted(expectedOrder).
+
+let AuthorizationSource() =
+  new sessionId:bitstring;
+  new nullifier:bitstring;
+  new sourceBlockNumber:bitstring;
+  new sourceBlockHash:bitstring;
+  new sourceTransactionHash:bitstring;
+  new sourceLogIndex:bitstring;
+  let amount = h((energyRequest_mWh,rateAtomicPerMWh)) in
+  let ctxHash = h(contextCore(protocolVersion,sourceChainId,
+        authorizationContract,paymentChainId,settlementContract,
+        credentialId,credentialVersion,credentialDigest,sessionId,
+        pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+        energyRequest_mWh,rateAtomicPerMWh,amount,
+        policyId,policyVersion,policyDigest,hOut,sampledAt,sampleCounter,expiry)) in
+  let eventId = h(eventCore(sourceChainId,authorizationContract,
+                            sessionId,ctxHash,nullifier)) in
+  let order = settlementOrder(protocolVersion,sourceChainId,
+        authorizationContract,paymentChainId,settlementContract,
+        eventId,ctxHash,credentialId,credentialVersion,credentialDigest,
+        sessionId,nullifier,pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+        energyRequest_mWh,rateAtomicPerMWh,amount,
+        policyId,policyVersion,policyDigest,hOut,sampledAt,sampleCounter,expiry) in
+  let intent = payerIntent(ctxHash,pk(skPayer),pk(skProvider),tokenAddress,
+        amount,expiry,sourceChainId,authorizationContract) in
+  event PayerIntentAuthorized(intent);
+  let chainEnvelope = finalizedAuthorization(order,sourceBlockNumber,
+        sourceBlockHash,sourceTransactionHash,sourceLogIndex) in
+  event AuthorizationAcceptedOrder(order);
+  out(net,(chainEnvelope,sign(chainEnvelope,skAuthorization)));
+  out(net,(order,sign(intent,skPayer)));
+  SettlementAttempt(order).
+
+process
+  out(net,(pk(skAuthorization),pk(skObserver1),pk(skObserver2),pk(skObserver3)));
+  (
+    Observer(observerId1,skObserver1)
+  | Observer(observerId2,skObserver2)
+  | Observer(observerId3,skObserver3)
+  | !AuthorizationSource()
+  )

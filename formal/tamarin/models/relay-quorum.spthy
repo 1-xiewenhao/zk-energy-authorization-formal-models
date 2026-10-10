@@ -1,0 +1,91 @@
+theory IOTJ_V2_Relay_Quorum
+begin
+
+builtins: signing, hashing
+functions: relaymsg/5
+
+restriction Distinct_Relay_Signers:
+  "All x #i. NotEqual(x,x)@i ==> F"
+
+rule Bootstrap:
+  [ Fr(~sys), Fr(~relaySk1), Fr(~relaySk2), Fr(~relaySk3), Fr(~epoch) ]
+  --[ RelayRegistered(~sys,~epoch,pk(~relaySk1)),
+      RelayRegistered(~sys,~epoch,pk(~relaySk2)),
+      RelayRegistered(~sys,~epoch,pk(~relaySk3)) ]->
+  [ !Relay(~sys,~epoch,pk(~relaySk1),~relaySk1),
+    !Relay(~sys,~epoch,pk(~relaySk2),~relaySk2),
+    !Relay(~sys,~epoch,pk(~relaySk3),~relaySk3),
+    !Epoch(~sys,~epoch),
+    Out(<pk(~relaySk1),pk(~relaySk2),pk(~relaySk3),~epoch>) ]
+
+rule Corrupt_Relay:
+  [ !Relay(sys,epoch,relay,relaySk) ]
+  --[ RelayCorrupted(sys,epoch,relay) ]->
+  [ Out(relaySk) ]
+
+rule Source_Finalize:
+  [ !Epoch(sys,epoch), Fr(~orderHash), Fr(~eventId), Fr(~ctx),
+    Fr(~provenance) ]
+  --[ AuthorizationFinalized(sys,~orderHash,~eventId,~ctx,~provenance) ]->
+  [ !Finalized(sys,~orderHash,~eventId,~ctx,~provenance),
+    Out(<~orderHash,~eventId,~ctx,~provenance>) ]
+
+rule Observer_Sign:
+  let relayMessage = relaymsg(orderHash,eventId,ctx,epoch,provenance)
+  in
+  [ In(<orderHash,eventId,ctx,provenance>),
+    !Finalized(sys,orderHash,eventId,ctx,provenance),
+    !Relay(sys,epoch,relay,relaySk), !Epoch(sys,epoch) ]
+  --[ RelaySigned(sys,orderHash,eventId,ctx,epoch,provenance,relay) ]->
+  [ Out(<relayMessage,orderHash,eventId,ctx,epoch,provenance,relay,
+         sign(relayMessage,relaySk)>) ]
+
+rule Collect_First:
+  let relayMessage = relaymsg(orderHash,eventId,ctx,epoch,provenance)
+  in
+  [ In(<relayMessage,orderHash,eventId,ctx,epoch,provenance,relay,
+        sign(relayMessage,relaySk)>),
+    !Relay(sys,epoch,relay,relaySk), !Epoch(sys,epoch) ]
+  --[ CertificateSubmitted(sys,orderHash,eventId,ctx,epoch,provenance,relay) ]->
+  [ OneCertificate(sys,orderHash,eventId,ctx,epoch,provenance,relay) ]
+
+rule Collect_Second:
+  let relayMessage = relaymsg(orderHash,eventId,ctx,epoch,provenance)
+  in
+  [ OneCertificate(sys,orderHash,eventId,ctx,epoch,provenance,relayA),
+    In(<relayMessage,orderHash,eventId,ctx,epoch,provenance,relayB,
+        sign(relayMessage,relaySkB)>),
+    !Relay(sys,epoch,relayB,relaySkB), !Epoch(sys,epoch) ]
+  --[ NotEqual(relayA,relayB),
+      CertificateSubmitted(sys,orderHash,eventId,ctx,epoch,provenance,relayB),
+      QuorumAccepted(sys,orderHash,eventId,ctx,epoch,provenance,relayA,relayB) ]->
+  [ QuorumEvidence(sys,orderHash,eventId,ctx,epoch,provenance,relayA,relayB) ]
+
+lemma executable_two_of_three_quorum:
+  exists-trace
+  "Ex sys orderHash eventId ctx epoch provenance relayA relayB #i.
+     QuorumAccepted(sys,orderHash,eventId,ctx,epoch,provenance,relayA,relayB)@i"
+
+lemma distinct_observer_quorum:
+  "All sys orderHash eventId ctx epoch provenance relayA relayB #i.
+     QuorumAccepted(sys,orderHash,eventId,ctx,epoch,provenance,relayA,relayB)@i
+     ==> not (relayA = relayB)"
+
+lemma each_certificate_has_origin_or_prior_corruption:
+  "All sys orderHash eventId ctx epoch provenance relay #i.
+     CertificateSubmitted(sys,orderHash,eventId,ctx,epoch,provenance,relay)@i
+     ==> (Ex #s. RelaySigned(sys,orderHash,eventId,ctx,epoch,
+                            provenance,relay)@s & #s < #i)
+       | (Ex #c. RelayCorrupted(sys,epoch,relay)@c & #c < #i)"
+
+lemma quorum_implies_finality_unless_both_signers_corrupt:
+  "All sys orderHash eventId ctx epoch provenance relayA relayB #i.
+     QuorumAccepted(sys,orderHash,eventId,ctx,epoch,provenance,relayA,relayB)@i
+     & not (Ex #c1 #c2.
+              RelayCorrupted(sys,epoch,relayA)@c1
+              & RelayCorrupted(sys,epoch,relayB)@c2
+              & #c1 < #i & #c2 < #i)
+     ==> (Ex #f. AuthorizationFinalized(sys,orderHash,eventId,ctx,provenance)@f
+                  & #f < #i)"
+
+end

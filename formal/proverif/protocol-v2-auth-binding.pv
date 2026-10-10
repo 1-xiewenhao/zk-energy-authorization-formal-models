@@ -1,0 +1,310 @@
+(* Protocol v2 -- ProVerif 2.05 auth/message binding module.
+   Constructor names encode the fixed V2 domain tags. All record argument
+   orders match revision_v2/Protocol_v2_Specification.md. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+free net: channel.
+
+free protocolVersion, sourceChainId, authorizationContract: bitstring.
+free paymentChainId, settlementContract: bitstring.
+free deviceRegistryContract, policyRegistryContract: bitstring.
+free credentialId, credentialVersion: bitstring.
+free credentialValidFrom, credentialValidUntil: bitstring.
+free policyId, policyVersion: bitstring.
+free centerX_cm, centerY_cm, radiusSquared_cm2: bitstring.
+free minDelivery_mWh, maxDelivery_mWh: bitstring.
+free energyRequest_mWh, deviceCapacity_mWh: bitstring.
+free rateAtomicPerMWh, tokenAddress: bitstring.
+free policyValidFrom, policyValidUntil, maxMeasurementAgeSec: bitstring.
+free sessionTTL: bitstring.
+
+free skDevice, skPayer, skProvider, skAttestor, skAuthorization: skey [private].
+free credentialSecret: bitstring [private].
+const ok: bitstring.
+
+fun pk(skey): pkey.
+fun sign(bitstring,skey): bitstring.
+fun checksign(bitstring,pkey): bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+fun h(bitstring): bitstring.
+
+(* Groth16 knowledge-soundness idealization: constructing a proof for a
+   credential commitment requires the committed secret. The remaining witness
+   tuple stays opaque and is not interpreted as physical-sensor authenticity. *)
+fun zkProof(bitstring,bitstring,bitstring): bitstring.
+fun verifyZk(bitstring,bitstring,bitstring): bitstring
+reduc forall w:bitstring,credSec:bitstring,s:bitstring;
+  verifyZk(zkProof(w,credSec,s),s,h(credSec)) = ok.
+
+fun credentialCore(
+  bitstring,bitstring,bitstring,pkey,pkey,bitstring,pkey,bitstring,
+  bitstring,bitstring,bitstring
+): bitstring [data].
+fun credentialRecord(
+  bitstring,bitstring,bitstring,pkey,pkey,bitstring,pkey,bitstring,
+  bitstring,bitstring
+): bitstring [data].
+
+fun policyCore(
+  bitstring,bitstring,bitstring,bitstring,pkey,
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring
+): bitstring [data].
+fun policyRecord(
+  bitstring,bitstring,pkey,
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+
+fun openRequest(bitstring,bitstring,bitstring,bitstring,bitstring,pkey,bitstring):
+  bitstring [data].
+fun sessionCore(
+  bitstring,bitstring,bitstring,bitstring,bitstring,pkey,pkey,
+  bitstring,bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+fun sessionRecord(
+  bitstring,bitstring,bitstring,bitstring,pkey,pkey,
+  bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+
+fun measurementCore(bitstring,bitstring,bitstring,bitstring,bitstring):
+  bitstring [data].
+fun measurementEnvelope(
+  bitstring,bitstring,bitstring,bitstring,bitstring,pkey,
+  bitstring,bitstring,bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+
+fun contextCore(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,pkey,pkey,pkey,
+  bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+fun payerIntent(bitstring,pkey,pkey,bitstring,bitstring,bitstring,bitstring,bitstring):
+  bitstring [data].
+fun zkWitness(bitstring,bitstring,bitstring,bitstring,bitstring): bitstring [data].
+fun zkStatement(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+fun txDigest(bitstring,bitstring,bitstring,bitstring,bitstring): bitstring [data].
+fun authRequest(
+  bitstring,bitstring,bitstring,bitstring,bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+fun eventCore(bitstring,bitstring,bitstring,bitstring,bitstring): bitstring [data].
+
+fun settlementOrder(
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring,bitstring,
+  bitstring,bitstring,pkey,pkey,pkey,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,
+  bitstring,bitstring,bitstring,bitstring
+): bitstring [data].
+
+event CredentialRegistered(bitstring).
+event PolicyRegistered(bitstring).
+event DeviceOpenAuthorized(bitstring).
+event SessionIssued(bitstring).
+event MeasurementAttested(bitstring).
+event PayerIntentAuthorized(bitstring).
+event DeviceTransactionAuthorized(bitstring).
+event CredentialPossessionProved(bitstring).
+event AuthorizationAccepted(
+  bitstring,bitstring,bitstring,bitstring,bitstring,bitstring,bitstring
+).
+event HonestAuthorizationCompleted(bitstring).
+
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(CredentialRegistered(c)).
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(PolicyRegistered(p)).
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(SessionIssued(s)).
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(MeasurementAttested(e)).
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(PayerIntentAuthorized(i)).
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(DeviceTransactionAuthorized(t)).
+query o,s,c,p,e,i,t:bitstring;
+  event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> event(CredentialPossessionProved(o)).
+query o,s,c,p,e,i,t:bitstring;
+  inj-event(AuthorizationAccepted(o,s,c,p,e,i,t))
+  ==> inj-event(SessionIssued(s)).
+query attacker(credentialSecret).
+query attacker(skDevice).
+query attacker(skPayer).
+query attacker(skAttestor).
+
+let AuthAttempt(gate:channel,token:bitstring,
+                credential:bitstring,policy:bitstring,session:bitstring,
+                zkKeyCommit:bitstring) =
+  in(net,r:bitstring);
+   let authRequest(=session,env:bitstring,attSig:bitstring,
+                   intent:bitstring,payerSig:bitstring,
+                   nullifier:bitstring,zkp:bitstring,deviceSig:bitstring) = r in
+   let sessionRecord(sid:bitstring,=credentialId,=credentialVersion,
+         credDigest:bitstring,=pk(skDevice),=pk(skPayer),
+         =policyId,=policyVersion,=energyRequest_mWh,expiry:bitstring) = session in
+   let credentialRecord(=credentialId,=credentialVersion,=credDigest,
+         =pk(skDevice),=pk(skPayer),=zkKeyCommit,=pk(skAttestor),
+         =deviceCapacity_mWh,=credentialValidFrom,=credentialValidUntil) = credential in
+   let policyRecord(=policyId,=policyVersion,=pk(skProvider),
+         =centerX_cm,=centerY_cm,=radiusSquared_cm2,
+         =minDelivery_mWh,=maxDelivery_mWh,=rateAtomicPerMWh,=tokenAddress,
+         =paymentChainId,=settlementContract,
+         =policyValidFrom,=policyValidUntil,=maxMeasurementAgeSec,
+         polDigest:bitstring) = policy in
+   let measurementEnvelope(=protocolVersion,=sourceChainId,
+         =authorizationContract,=credentialId,=credDigest,=pk(skDevice),
+         =polDigest,=sid,hOut:bitstring,sampledAt:bitstring,
+         sampleCounter:bitstring,=expiry) = checksign(attSig,pk(skAttestor)) in
+   let amount = h((energyRequest_mWh,rateAtomicPerMWh)) in
+   let ctxHash = h(contextCore(protocolVersion,sourceChainId,
+         authorizationContract,paymentChainId,settlementContract,
+         credentialId,credentialVersion,credDigest,sid,
+         pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+         energyRequest_mWh,rateAtomicPerMWh,amount,
+         policyId,policyVersion,polDigest,hOut,sampledAt,sampleCounter,expiry)) in
+   let expectedIntent = payerIntent(ctxHash,pk(skPayer),pk(skProvider),
+         tokenAddress,amount,expiry,sourceChainId,authorizationContract) in
+   let (=expectedIntent) = checksign(payerSig,pk(skPayer)) in
+   let statement = zkStatement(centerX_cm,centerY_cm,radiusSquared_cm2,
+         deviceCapacity_mWh,energyRequest_mWh,sid,hOut,zkKeyCommit,
+         ctxHash,nullifier) in
+   let (=ok) = verifyZk(zkp,statement,zkKeyCommit) in
+   let expectedTx = txDigest(session,env,expectedIntent,nullifier,zkp) in
+   let (=expectedTx) = checksign(deviceSig,pk(skDevice)) in
+   in(gate,=token);
+   let eventId = h(eventCore(sourceChainId,authorizationContract,
+                             sid,ctxHash,nullifier)) in
+   let order = settlementOrder(protocolVersion,sourceChainId,
+         authorizationContract,paymentChainId,settlementContract,
+         eventId,ctxHash,credentialId,credentialVersion,credDigest,
+         sid,nullifier,pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+         energyRequest_mWh,rateAtomicPerMWh,amount,
+         policyId,policyVersion,polDigest,hOut,sampledAt,sampleCounter,expiry) in
+   event AuthorizationAccepted(order,session,credential,policy,
+                               env,expectedIntent,expectedTx);
+   event HonestAuthorizationCompleted(order).
+
+let AuthLedger(credential:bitstring,policy:bitstring,
+               credDigest:bitstring,zkKeyCommit:bitstring) =
+  !in(net,(req:bitstring,ownerSig:bitstring));
+   let expectedOpen = openRequest(credentialId,credentialVersion,
+         policyId,policyVersion,energyRequest_mWh,pk(skPayer),sessionTTL) in
+   let (=expectedOpen) = checksign(ownerSig,pk(skDevice)) in
+   new sessionCounter:bitstring;
+   new expiry:bitstring;
+   let sid = h(sessionCore(sourceChainId,authorizationContract,
+         credentialId,credentialVersion,credDigest,pk(skDevice),pk(skPayer),
+         policyId,policyVersion,energyRequest_mWh,sessionCounter,expiry)) in
+   let session = sessionRecord(sid,credentialId,credentialVersion,credDigest,
+         pk(skDevice),pk(skPayer),policyId,policyVersion,
+         energyRequest_mWh,expiry) in
+   event SessionIssued(session);
+   out(net,(session,sign(session,skAuthorization)));
+   new gate:channel;
+   new token:bitstring;
+   out(gate,token);
+   AuthAttempt(gate,token,credential,policy,session,zkKeyCommit).
+
+let HonestDriver(credDigest:bitstring,polDigest:bitstring,
+                 zkKeyCommit:bitstring) =
+  !in(net,(session:bitstring,sessionSig:bitstring));
+   let sessionRecord(sid:bitstring,=credentialId,=credentialVersion,
+         =credDigest,=pk(skDevice),=pk(skPayer),=policyId,=policyVersion,
+         =energyRequest_mWh,expiry:bitstring) =
+       checksign(sessionSig,pk(skAuthorization)) in
+   new x:bitstring;
+   new y:bitstring;
+   new currentEnergy:bitstring;
+   new blinding:bitstring;
+   new sampledAt:bitstring;
+   new sampleCounter:bitstring;
+   let hOut = h(measurementCore(sid,x,y,currentEnergy,blinding)) in
+   let env = measurementEnvelope(protocolVersion,sourceChainId,
+         authorizationContract,credentialId,credDigest,pk(skDevice),
+         polDigest,sid,hOut,sampledAt,sampleCounter,expiry) in
+   event MeasurementAttested(env);
+   let attSig = sign(env,skAttestor) in
+   let amount = h((energyRequest_mWh,rateAtomicPerMWh)) in
+   let ctxHash = h(contextCore(protocolVersion,sourceChainId,
+         authorizationContract,paymentChainId,settlementContract,
+         credentialId,credentialVersion,credDigest,sid,
+         pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+         energyRequest_mWh,rateAtomicPerMWh,amount,
+         policyId,policyVersion,polDigest,hOut,sampledAt,sampleCounter,expiry)) in
+   let nullifier = h((credentialSecret,sid,ctxHash)) in
+   let intent = payerIntent(ctxHash,pk(skPayer),pk(skProvider),tokenAddress,
+         amount,expiry,sourceChainId,authorizationContract) in
+   event PayerIntentAuthorized(intent);
+   let payerSig = sign(intent,skPayer) in
+   let witness = zkWitness(x,y,currentEnergy,credentialSecret,blinding) in
+   let statement = zkStatement(centerX_cm,centerY_cm,radiusSquared_cm2,
+         deviceCapacity_mWh,energyRequest_mWh,sid,hOut,zkKeyCommit,
+         ctxHash,nullifier) in
+   let zkp = zkProof(witness,credentialSecret,statement) in
+   let txd = txDigest(session,env,intent,nullifier,zkp) in
+   event DeviceTransactionAuthorized(txd);
+   let eventId = h(eventCore(sourceChainId,authorizationContract,
+                             sid,ctxHash,nullifier)) in
+   let order = settlementOrder(protocolVersion,sourceChainId,
+         authorizationContract,paymentChainId,settlementContract,
+         eventId,ctxHash,credentialId,credentialVersion,credDigest,
+         sid,nullifier,pk(skDevice),pk(skPayer),pk(skProvider),tokenAddress,
+         energyRequest_mWh,rateAtomicPerMWh,amount,
+         policyId,policyVersion,polDigest,hOut,sampledAt,sampleCounter,expiry) in
+   event CredentialPossessionProved(order);
+   let deviceSig = sign(txd,skDevice) in
+   out(net,authRequest(session,env,attSig,intent,payerSig,
+                       nullifier,zkp,deviceSig)).
+
+let HonestOpen() =
+  let req = openRequest(credentialId,credentialVersion,policyId,policyVersion,
+        energyRequest_mWh,pk(skPayer),sessionTTL) in
+  event DeviceOpenAuthorized(req);
+  out(net,(req,sign(req,skDevice))).
+
+process
+  let zkKeyCommit = h(credentialSecret) in
+  let credDigest = h(credentialCore(sourceChainId,deviceRegistryContract,
+        credentialId,pk(skDevice),pk(skPayer),zkKeyCommit,pk(skAttestor),
+        deviceCapacity_mWh,credentialVersion,
+        credentialValidFrom,credentialValidUntil)) in
+  let credential = credentialRecord(credentialId,credentialVersion,credDigest,
+        pk(skDevice),pk(skPayer),zkKeyCommit,pk(skAttestor),
+        deviceCapacity_mWh,credentialValidFrom,credentialValidUntil) in
+  let polDigest = h(policyCore(sourceChainId,policyRegistryContract,
+        policyId,policyVersion,pk(skProvider),centerX_cm,centerY_cm,
+        radiusSquared_cm2,minDelivery_mWh,maxDelivery_mWh,
+        rateAtomicPerMWh,tokenAddress,paymentChainId,settlementContract,
+        policyValidFrom,policyValidUntil,maxMeasurementAgeSec)) in
+  let policy = policyRecord(policyId,policyVersion,pk(skProvider),
+        centerX_cm,centerY_cm,radiusSquared_cm2,
+        minDelivery_mWh,maxDelivery_mWh,rateAtomicPerMWh,tokenAddress,
+        paymentChainId,settlementContract,policyValidFrom,policyValidUntil,
+        maxMeasurementAgeSec,polDigest) in
+  event CredentialRegistered(credential);
+  event PolicyRegistered(policy);
+  out(net,(credential,policy,pk(skAuthorization)));
+  (
+    AuthLedger(credential,policy,credDigest,zkKeyCommit)
+  | HonestDriver(credDigest,polDigest,zkKeyCommit)
+  | !HonestOpen()
+  )

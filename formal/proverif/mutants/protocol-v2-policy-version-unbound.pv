@@ -1,0 +1,51 @@
+(* EXPECTED-FAILING MUTANT: provider policy version omitted from the signed
+   policy digest and from the verifier's record-selection equality. This is a
+   focused sensitivity test, not a model of the repaired implementation.
+
+   Implementation guard restored in Protocol v2:
+   - ProtocolV2Crypto.policyDigest includes policyVersion.
+   - EnergyServiceAuthorizationV2 gets (policyId, policyVersion) and checks
+     returned policy.policyVersion equals the session-bound version.
+
+   Expected result: PolicyAccepted ==> PolicyRegistered is false, with a trace
+   in which an attacker supplies a different version under a reusable digest. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+free net:channel.
+
+free policyId,registeredVersion:bitstring.
+free provider,token,rateAtomicPerMWh:bitstring.
+free skProvider:skey [private].
+
+fun pk(skey):pkey.
+fun sign(bitstring,skey):bitstring.
+fun checksign(bitstring,pkey):bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+fun h(bitstring):bitstring.
+
+(* Mutation: policyVersion is intentionally absent. *)
+fun policyDigestWithoutVersion(bitstring,bitstring,bitstring,bitstring):bitstring [data].
+
+event PolicyRegistered(bitstring,bitstring).
+event PolicyAccepted(bitstring,bitstring).
+
+query id,v:bitstring;
+  event(PolicyAccepted(id,v)) ==> event(PolicyRegistered(id,v)).
+
+let MutantVerifier() =
+  !in(net,(claimedVersion:bitstring,digest:bitstring,sig:bitstring));
+   let (=digest) = checksign(sig,pk(skProvider)) in
+   if digest = h(policyDigestWithoutVersion(policyId,provider,token,
+                                             rateAtomicPerMWh)) then
+   event PolicyAccepted(policyId,claimedVersion).
+
+process
+  let digest = h(policyDigestWithoutVersion(policyId,provider,token,
+                                             rateAtomicPerMWh)) in
+  event PolicyRegistered(policyId,registeredVersion);
+  out(net,(digest,sign(digest,skProvider)));
+  MutantVerifier()

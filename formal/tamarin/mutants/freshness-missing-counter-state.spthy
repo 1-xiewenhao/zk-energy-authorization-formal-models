@@ -1,0 +1,71 @@
+theory IOTJ_V2_Freshness_Missing_Counter_State_Mutant
+begin
+
+builtins: signing, hashing
+functions: measurementctx/9
+
+/*
+  EXPECTED-FAILING NEGATIVE MUTANT.
+  It retains session consumption and a conditional validity guard, but removes
+  the per-credential LastAcceptedCounter transition. A compromised attestor can
+  therefore sign the same counter value for two live sessions of one credential.
+  credential_counter_value_single_use must be falsified.
+*/
+
+rule Bootstrap:
+  [ Fr(~sys), Fr(~device), Fr(~credential), Fr(~attestorSk) ]
+  -->
+  [ !Device(~sys,~device,~credential),
+    !Attestor(~sys,pk(~attestorSk),~attestorSk),
+    Out(<~sys,~device,~credential,pk(~attestorSk)>) ]
+
+rule Corrupt_Attestor:
+  [ !Attestor(sys,attestor,attestorSk) ]
+  --[ AttestorCorrupted(sys,attestor) ]->
+  [ Out(attestorSk) ]
+
+rule Issue_Session:
+  [ !Device(sys,device,credential),
+    Fr(~session), Fr(~eventId), Fr(~nullifier),
+    Fr(~issuedAt), Fr(~expiry) ]
+  --[ SessionIssued(sys,~session,~eventId,~nullifier,credential,device,
+                    ~issuedAt,~expiry) ]->
+  [ !SessionBinding(sys,~session,~eventId,~nullifier,credential,device,
+                    ~issuedAt,~expiry),
+    !ValidWindow(sys,~session,~issuedAt,~expiry),
+    FreshSession(sys,~session,~eventId,~nullifier,~expiry),
+    Out(<~session,~eventId,~nullifier,credential,~issuedAt,~expiry>) ]
+
+rule Ledger_Accept_Without_Counter_State:
+  let measurement = measurementctx(sys,session,eventId,nullifier,credential,
+                                   issuedAt,expiry,sampledAt,counter)
+  in
+  [ In(<measurement,session,eventId,nullifier,credential,issuedAt,expiry,
+        sampledAt,counter,sign(measurement,attestorSk)>),
+    !SessionBinding(sys,session,eventId,nullifier,credential,device,
+                    issuedAt,expiry),
+    !ValidWindow(sys,session,issuedAt,expiry),
+    !Attestor(sys,attestor,attestorSk),
+    FreshSession(sys,session,eventId,nullifier,expiry) ]
+  --[ AuthorizationAccepted(sys,session,eventId,nullifier,credential,device,
+                            attestor,issuedAt,expiry,sampledAt,counter) ]->
+  [ ConsumedSession(sys,session,eventId,nullifier) ]
+
+lemma executable_mutant:
+  exists-trace
+  "Ex sys session eventId nullifier credential device attestor issuedAt expiry
+      sampledAt counter #i.
+     AuthorizationAccepted(sys,session,eventId,nullifier,credential,device,
+                           attestor,issuedAt,expiry,sampledAt,counter)@i"
+
+lemma credential_counter_value_single_use:
+  "All sys session1 session2 event1 event2 null1 null2 credential
+       device1 device2 attestor1 attestor2 issued1 issued2 expiry1 expiry2
+       sampled1 sampled2 counter #i #j.
+     AuthorizationAccepted(sys,session1,event1,null1,credential,device1,
+                           attestor1,issued1,expiry1,sampled1,counter)@i
+     & AuthorizationAccepted(sys,session2,event2,null2,credential,device2,
+                            attestor2,issued2,expiry2,sampled2,counter)@j
+     ==> #i = #j"
+
+end

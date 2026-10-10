@@ -1,0 +1,95 @@
+(* Protocol v2 -- ProVerif 2.05 compromise-aware authentication module.
+   Corruption is attacker-triggered; each secret is released only after its
+   explicit corruption event, so correspondences state the exact exception. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+free net:channel.
+
+free skDevice,skPayer,skAttestor:skey [private].
+free credentialSecret:bitstring [private].
+free corruptDevice,corruptPayer,corruptAttestor:bitstring.
+free publicSession,publicPolicy,publicPaymentContext:bitstring.
+
+fun pk(skey):pkey.
+fun sign(bitstring,skey):bitstring.
+fun checksign(bitstring,pkey):bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+fun h(bitstring):bitstring.
+
+fun measurementEnvelope(bitstring,bitstring,bitstring):bitstring [data].
+fun payerIntent(bitstring,pkey,bitstring):bitstring [data].
+fun deviceAuthorization(bitstring,bitstring,bitstring):bitstring [data].
+fun acceptedContext(bitstring,bitstring,bitstring,bitstring):bitstring [data].
+
+event MeasurementAttested(bitstring).
+event PayerIntentAuthorized(bitstring).
+event DeviceTransactionAuthorized(bitstring).
+event AuthorizationAccepted(bitstring,bitstring,bitstring,bitstring).
+event DeviceCorrupted(pkey).
+event PayerCorrupted(pkey).
+event AttestorCorrupted(pkey).
+
+query ctx,e,i,d:bitstring;
+  event(AuthorizationAccepted(ctx,e,i,d))
+  ==> event(MeasurementAttested(e)) || event(AttestorCorrupted(pk(skAttestor))).
+query ctx,e,i,d:bitstring;
+  event(AuthorizationAccepted(ctx,e,i,d))
+  ==> event(PayerIntentAuthorized(i)) || event(PayerCorrupted(pk(skPayer))).
+query ctx,e,i,d:bitstring;
+  event(AuthorizationAccepted(ctx,e,i,d))
+  ==> event(DeviceTransactionAuthorized(d)) || event(DeviceCorrupted(pk(skDevice))).
+
+query attacker(credentialSecret) ==> event(DeviceCorrupted(pk(skDevice))).
+query attacker(skDevice) ==> event(DeviceCorrupted(pk(skDevice))).
+query attacker(skPayer) ==> event(PayerCorrupted(pk(skPayer))).
+query attacker(skAttestor) ==> event(AttestorCorrupted(pk(skAttestor))).
+
+let HonestRoles() =
+  new sample:bitstring;
+  let env = measurementEnvelope(publicSession,publicPolicy,h(sample)) in
+  event MeasurementAttested(env);
+  out(net,(env,sign(env,skAttestor)));
+  let intent = payerIntent(publicPaymentContext,pk(skPayer),publicSession) in
+  event PayerIntentAuthorized(intent);
+  out(net,(intent,sign(intent,skPayer)));
+  let deviceMsg = deviceAuthorization(publicSession,env,intent) in
+  event DeviceTransactionAuthorized(deviceMsg);
+  out(net,(deviceMsg,sign(deviceMsg,skDevice))).
+
+let Verifier() =
+  !in(net,(env:bitstring,attSig:bitstring,
+           intent:bitstring,payerSig:bitstring,
+           deviceMsg:bitstring,deviceSig:bitstring));
+   let (=env) = checksign(attSig,pk(skAttestor)) in
+   let (=intent) = checksign(payerSig,pk(skPayer)) in
+   let (=deviceMsg) = checksign(deviceSig,pk(skDevice)) in
+   let expectedDeviceMsg = deviceAuthorization(publicSession,env,intent) in
+   if deviceMsg = expectedDeviceMsg then
+   let ctx = acceptedContext(publicSession,env,intent,deviceMsg) in
+   event AuthorizationAccepted(ctx,env,intent,deviceMsg).
+
+let Corruptions() =
+  (
+    in(net,=corruptDevice);
+    event DeviceCorrupted(pk(skDevice));
+    out(net,skDevice);
+    out(net,credentialSecret)
+  ) |
+  (
+    in(net,=corruptPayer);
+    event PayerCorrupted(pk(skPayer));
+    out(net,skPayer)
+  ) |
+  (
+    in(net,=corruptAttestor);
+    event AttestorCorrupted(pk(skAttestor));
+    out(net,skAttestor)
+  ).
+
+process
+  out(net,(pk(skDevice),pk(skPayer),pk(skAttestor)));
+  (!HonestRoles() | Verifier() | Corruptions())

@@ -1,0 +1,2 @@
+c7c9cdb707fcf00b1d17e2bf7f656e8746fd4302a6f5568913525eae7d68260c  proverif-reference.zip
+63767fa03d8ff9c7c46ff572d42140f6e15c9222d5cd4e274fa3848c09961ee7  tamarin-reference.zip

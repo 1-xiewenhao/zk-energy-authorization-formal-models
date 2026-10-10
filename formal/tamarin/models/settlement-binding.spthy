@@ -1,0 +1,157 @@
+theory IOTJ_V2_Settlement_Binding
+begin
+
+builtins: signing, hashing
+functions: eventid/4, orderhash/11, payerintent/7, certmsg/4
+
+restriction Distinct_Relay_Signers:
+  "All x #i. NotEqual(x,x)@i ==> F"
+
+rule Bootstrap:
+  [ Fr(~sys), Fr(~payerSk), Fr(~relaySk1), Fr(~relaySk2), Fr(~relaySk3),
+    Fr(~epoch) ]
+  -->
+  [ !Payer(~sys,pk(~payerSk),~payerSk),
+    !Relay(~sys,~epoch,pk(~relaySk1),~relaySk1),
+    !Relay(~sys,~epoch,pk(~relaySk2),~relaySk2),
+    !Relay(~sys,~epoch,pk(~relaySk3),~relaySk3),
+    !Epoch(~sys,~epoch),
+    Out(<pk(~payerSk),pk(~relaySk1),pk(~relaySk2),pk(~relaySk3),~epoch>) ]
+
+rule Payer_Prepare_Order:
+  let eventId = eventid(sys,~session,~ctx,~nullifier)
+      orderHash = orderhash(sys,eventId,~ctx,payer,~provider,~token,
+                            ~provider,~amount,~rate,~policyVersion,~expiry)
+      intent = payerintent(sys,~ctx,payer,~provider,~token,~amount,~expiry)
+  in
+  [ !Payer(sys,payer,payerSk),
+    Fr(~ctx), Fr(~session), Fr(~nullifier), Fr(~provider), Fr(~token),
+    Fr(~amount), Fr(~rate), Fr(~policyVersion), Fr(~expiry) ]
+  --[ PayerOrderPrepared(sys,orderHash,eventId,~ctx,~session,~nullifier,
+                         payer,~provider,~token,~provider,~amount,~rate,
+                         ~policyVersion,~expiry) ]->
+  [ !PreparedOrder(sys,orderHash,eventId,~ctx,~session,~nullifier,
+                   payer,~provider,~token,~provider,~amount,~rate,
+                   ~policyVersion,~expiry),
+    PendingRegistration(sys,eventId,~ctx),
+    Out(<orderHash,eventId,~ctx,~session,~nullifier,payer,~provider,
+         ~token,~provider,~amount,~rate,~policyVersion,~expiry,
+         sign(intent,payerSk)>) ]
+
+rule Register_Order:
+  let eventId = eventid(sys,session,ctx,nullifier)
+      orderHash = orderhash(sys,eventId,ctx,payer,provider,token,
+                            provider,amount,rate,policyVersion,expiry)
+      intent = payerintent(sys,ctx,payer,provider,token,amount,expiry)
+  in
+  [ In(<orderHash,eventId,ctx,session,nullifier,payer,provider,token,
+        provider,amount,rate,policyVersion,expiry,sign(intent,payerSk)>),
+    !Payer(sys,payer,payerSk),
+    !PreparedOrder(sys,orderHash,eventId,ctx,session,nullifier,
+                   payer,provider,token,provider,amount,rate,
+                   policyVersion,expiry),
+    PendingRegistration(sys,eventId,ctx) ]
+  --[ PaymentOrderRegistered(sys,orderHash,eventId,ctx,session,nullifier,
+                             payer,provider,token,provider,amount,rate,
+                             policyVersion,expiry) ]->
+  [ !RegisteredOrder(sys,orderHash,eventId,ctx,session,nullifier,
+                     payer,provider,token,provider,amount,rate,
+                     policyVersion,expiry),
+    Unsettled(sys,eventId,ctx),
+    Out(<orderHash,eventId,ctx>) ]
+
+rule Relay_Attest_Order:
+  let certificate = certmsg(orderHash,eventId,ctx,epoch)
+  in
+  [ In(<orderHash,eventId,ctx>),
+    !Relay(sys,epoch,relay,relaySk), !Epoch(sys,epoch) ]
+  --[ RelayCertificateIssued(sys,orderHash,eventId,ctx,epoch,relay) ]->
+  [ Out(<certificate,orderHash,eventId,ctx,epoch,relay,
+         sign(certificate,relaySk)>) ]
+
+rule Collect_First:
+  let certificate = certmsg(orderHash,eventId,ctx,epoch)
+  in
+  [ In(<certificate,orderHash,eventId,ctx,epoch,relay,
+        sign(certificate,relaySk)>),
+    !Relay(sys,epoch,relay,relaySk), !Epoch(sys,epoch) ]
+  -->
+  [ OneCertificate(sys,orderHash,eventId,ctx,epoch,relay) ]
+
+rule Collect_Second:
+  let certificate = certmsg(orderHash,eventId,ctx,epoch)
+  in
+  [ OneCertificate(sys,orderHash,eventId,ctx,epoch,relayA),
+    In(<certificate,orderHash,eventId,ctx,epoch,relayB,
+        sign(certificate,relaySkB)>),
+    !Relay(sys,epoch,relayB,relaySkB), !Epoch(sys,epoch) ]
+  --[ NotEqual(relayA,relayB),
+      QuorumAccepted(sys,orderHash,eventId,ctx,epoch,relayA,relayB) ]->
+  [ QuorumReady(sys,orderHash,eventId,ctx,epoch,relayA,relayB) ]
+
+rule Settle:
+  [ QuorumReady(sys,orderHash,eventId,ctx,epoch,relayA,relayB),
+    !RegisteredOrder(sys,orderHash,eventId,ctx,session,nullifier,
+                     payer,provider,token,payee,amount,rate,
+                     policyVersion,expiry),
+    Unsettled(sys,eventId,ctx) ]
+  --[ SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,
+                         payer,provider,token,payee,amount,rate,
+                         policyVersion,expiry,epoch,relayA,relayB) ]->
+  [ Settled(sys,eventId,ctx) ]
+
+lemma executable_settlement:
+  exists-trace
+  "Ex sys orderHash eventId ctx session nullifier payer provider token payee
+      amount rate policyVersion expiry epoch relayA relayB #i.
+     SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,
+                        payer,provider,token,payee,amount,rate,
+                        policyVersion,expiry,epoch,relayA,relayB)@i"
+
+lemma settlement_requires_two_distinct_certificates:
+  "All sys orderHash eventId ctx session nullifier payer provider token payee
+       amount rate policyVersion expiry epoch relayA relayB #i.
+     SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,
+                        payer,provider,token,payee,amount,rate,
+                        policyVersion,expiry,epoch,relayA,relayB)@i
+     ==> (Ex #q. QuorumAccepted(sys,orderHash,eventId,ctx,epoch,relayA,relayB)@q
+                   & #q < #i)
+       & not (relayA = relayB)"
+
+lemma exact_payment_context_binding:
+  "All sys orderHash eventId ctx session nullifier payer provider token payee
+       amount rate policyVersion expiry epoch relayA relayB #i.
+     SettlementAccepted(sys,orderHash,eventId,ctx,session,nullifier,
+                        payer,provider,token,payee,amount,rate,
+                        policyVersion,expiry,epoch,relayA,relayB)@i
+     ==> (Ex #p. PayerOrderPrepared(sys,orderHash,eventId,ctx,session,nullifier,
+                                   payer,provider,token,payee,amount,rate,
+                                   policyVersion,expiry)@p & #p < #i)"
+
+lemma event_settled_at_most_once:
+  "All sys order1 order2 eventId ctx1 ctx2 session1 session2 null1 null2
+       payer1 payer2 provider1 provider2 token1 token2 payee1 payee2
+       amount1 amount2 rate1 rate2 pv1 pv2 expiry1 expiry2 epoch1 epoch2
+       a1 a2 b1 b2 #i #j.
+     SettlementAccepted(sys,order1,eventId,ctx1,session1,null1,payer1,
+                        provider1,token1,payee1,amount1,rate1,pv1,expiry1,
+                        epoch1,a1,a2)@i
+     & SettlementAccepted(sys,order2,eventId,ctx2,session2,null2,payer2,
+                         provider2,token2,payee2,amount2,rate2,pv2,expiry2,
+                         epoch2,b1,b2)@j
+     ==> #i = #j"
+
+lemma context_settled_at_most_once:
+  "All sys order1 order2 event1 event2 ctx session1 session2 null1 null2
+       payer1 payer2 provider1 provider2 token1 token2 payee1 payee2
+       amount1 amount2 rate1 rate2 pv1 pv2 expiry1 expiry2 epoch1 epoch2
+       a1 a2 b1 b2 #i #j.
+     SettlementAccepted(sys,order1,event1,ctx,session1,null1,payer1,
+                        provider1,token1,payee1,amount1,rate1,pv1,expiry1,
+                        epoch1,a1,a2)@i
+     & SettlementAccepted(sys,order2,event2,ctx,session2,null2,payer2,
+                         provider2,token2,payee2,amount2,rate2,pv2,expiry2,
+                         epoch2,b1,b2)@j
+     ==> #i = #j"
+
+end

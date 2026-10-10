@@ -1,0 +1,182 @@
+theory IOTJ_V2_Freshness_Replay
+begin
+
+builtins: signing, hashing
+functions: measurementctx/9, succ/1
+
+/*
+  The implementation uses sessionId for the live authorization session and the
+  derived eventId as the authorization-record identifier.  There is no separate
+  authorizationId. FreshSession is the linear symbolic form of state==Issued;
+  acceptance and expiry consume the same token. ValidWindow is an explicit,
+  conditional abstraction of the implementation's maxAge/futureSkew/validUntil
+  checks. Numeric timestamp inequalities are deliberately left to the Foundry
+  boundary/mutation tests. succ(c) conservatively abstracts a strictly newer
+  per-credential counter; it is not a proof of machine-integer arithmetic.
+*/
+
+rule Bootstrap:
+  [ Fr(~sys), Fr(~deviceSk), Fr(~attestorSk), Fr(~credential) ]
+  --[ DeviceRegistered(~sys,pk(~deviceSk),~credential),
+      AttestorRegistered(~sys,pk(~attestorSk)) ]->
+  [ !Device(~sys,pk(~deviceSk),~credential,~deviceSk),
+    !Attestor(~sys,pk(~attestorSk),~attestorSk),
+    NextMeasurementCounter(~sys,~credential,'counter-zero'),
+    LastAcceptedCounter(~sys,~credential,'counter-zero'),
+    Out(<pk(~deviceSk),pk(~attestorSk),~credential>) ]
+
+rule Corrupt_Attestor:
+  [ !Attestor(sys,attestor,attestorSk) ]
+  --[ AttestorCorrupted(sys,attestor) ]->
+  [ Out(attestorSk) ]
+
+rule Issue_Session:
+  [ !Device(sys,device,credential,deviceSk),
+    Fr(~session), Fr(~eventId), Fr(~nullifier),
+    Fr(~issuedAt), Fr(~expiry) ]
+  --[ SessionIssued(sys,~session,~eventId,~nullifier,
+                    credential,device,~issuedAt,~expiry),
+      ValidityGuardInstalled(sys,~session,~issuedAt,~expiry) ]->
+  [ !SessionBinding(sys,~session,~eventId,~nullifier,
+                    credential,device,~issuedAt,~expiry),
+    !ValidWindow(sys,~session,~issuedAt,~expiry),
+    FreshSession(sys,~session,~eventId,~nullifier,~expiry),
+    Out(<~session,~eventId,~nullifier,credential,device,~issuedAt,~expiry>) ]
+
+rule Honest_Attest:
+  let counter = succ(lastIssued)
+      measurement = measurementctx(sys,session,eventId,nullifier,
+                                   credential,issuedAt,expiry,
+                                   ~sampledAt,counter)
+  in
+  [ In(<session,eventId,nullifier,credential,device,issuedAt,expiry>),
+    !SessionBinding(sys,session,eventId,nullifier,
+                    credential,device,issuedAt,expiry),
+    !Attestor(sys,attestor,attestorSk),
+    NextMeasurementCounter(sys,credential,lastIssued),
+    Fr(~sampledAt) ]
+  --[ MeasurementAttested(sys,attestor,measurement,session,eventId,
+                          nullifier,credential,issuedAt,expiry,
+                          ~sampledAt,counter),
+      MeasurementCounterIssued(sys,credential,lastIssued,counter) ]->
+  [ Out(<measurement,session,eventId,nullifier,credential,
+         issuedAt,expiry,~sampledAt,counter,
+         sign(measurement,attestorSk)>),
+    NextMeasurementCounter(sys,credential,counter) ]
+
+rule Ledger_Accept_Fresh:
+  let counter = succ(lastAccepted)
+      measurement = measurementctx(sys,session,eventId,nullifier,
+                                   credential,issuedAt,expiry,
+                                   sampledAt,counter)
+  in
+  [ In(<measurement,session,eventId,nullifier,credential,
+        issuedAt,expiry,sampledAt,counter,sign(measurement,attestorSk)>),
+    !SessionBinding(sys,session,eventId,nullifier,
+                    credential,device,issuedAt,expiry),
+    !ValidWindow(sys,session,issuedAt,expiry),
+    !Attestor(sys,attestor,attestorSk),
+    LastAcceptedCounter(sys,credential,lastAccepted),
+    FreshSession(sys,session,eventId,nullifier,expiry) ]
+  --[ FreshnessWindowChecked(sys,session,issuedAt,expiry,sampledAt),
+      CounterAdvanced(sys,credential,lastAccepted,counter),
+      AuthorizationAccepted(sys,session,eventId,nullifier,
+                            credential,device,attestor,issuedAt,expiry,
+                            sampledAt,counter) ]->
+  [ ConsumedSession(sys,session,eventId,nullifier),
+    LastAcceptedCounter(sys,credential,counter) ]
+
+rule Expire_Session:
+  [ FreshSession(sys,session,eventId,nullifier,expiry) ]
+  --[ SessionExpired(sys,session,eventId,nullifier,expiry) ]->
+  [ ExpiredSession(sys,session,eventId,nullifier) ]
+
+lemma executable_fresh_authorization:
+  exists-trace
+  "Ex sys session eventId nullifier credential device attestor
+      issuedAt expiry sampledAt counter #i.
+     AuthorizationAccepted(sys,session,eventId,nullifier,
+                           credential,device,attestor,issuedAt,expiry,
+                           sampledAt,counter)@i"
+
+lemma honest_attestor_conditional_freshness:
+  "All sys session eventId nullifier credential device attestor
+       issuedAt expiry sampledAt counter #i.
+     AuthorizationAccepted(sys,session,eventId,nullifier,
+                           credential,device,attestor,issuedAt,expiry,
+                           sampledAt,counter)@i
+     ==> (Ex measurement #a.
+            MeasurementAttested(sys,attestor,measurement,session,eventId,
+                                nullifier,credential,issuedAt,expiry,
+                                sampledAt,counter)@a & #a < #i)
+       | (Ex #c. AttestorCorrupted(sys,attestor)@c & #c < #i)"
+
+lemma accepted_has_conditional_validity_guard:
+  "All sys session eventId nullifier credential device attestor
+       issuedAt expiry sampledAt counter #i.
+     AuthorizationAccepted(sys,session,eventId,nullifier,
+                           credential,device,attestor,issuedAt,expiry,
+                           sampledAt,counter)@i
+     ==> FreshnessWindowChecked(sys,session,issuedAt,expiry,sampledAt)@i
+       & (Ex #s. SessionIssued(sys,session,eventId,nullifier,
+                              credential,device,issuedAt,expiry)@s & #s < #i)"
+
+lemma accepted_counter_has_monotonic_transition:
+  "All sys session eventId nullifier credential device attestor
+       issuedAt expiry sampledAt counter #i.
+     AuthorizationAccepted(sys,session,eventId,nullifier,
+                           credential,device,attestor,issuedAt,expiry,
+                           sampledAt,counter)@i
+     ==> (Ex previous. CounterAdvanced(sys,credential,previous,counter)@i
+                       & counter = succ(previous))"
+
+lemma credential_counter_value_single_use:
+  "All sys session1 session2 event1 event2 null1 null2 credential
+       device1 device2 attestor1 attestor2 issued1 issued2 expiry1 expiry2
+       sampled1 sampled2 counter #i #j.
+     AuthorizationAccepted(sys,session1,event1,null1,credential,device1,
+                           attestor1,issued1,expiry1,sampled1,counter)@i
+     & AuthorizationAccepted(sys,session2,event2,null2,credential,device2,
+                            attestor2,issued2,expiry2,sampled2,counter)@j
+     ==> #i = #j"
+
+lemma expired_session_not_accepted:
+  "All sys session eventId nullifier credential device attestor
+       issuedAt expiry sampledAt counter #e #a.
+     SessionExpired(sys,session,eventId,nullifier,expiry)@e
+     & AuthorizationAccepted(sys,session,eventId,nullifier,
+                            credential,device,attestor,issuedAt,expiry,
+                            sampledAt,counter)@a
+     ==> F"
+
+lemma session_single_use:
+  "All sys session event1 event2 null1 null2 cred1 cred2
+       dev1 dev2 att1 att2 issued1 issued2 expiry1 expiry2
+       sampled1 sampled2 counter1 counter2 #i #j.
+     AuthorizationAccepted(sys,session,event1,null1,cred1,dev1,att1,
+                           issued1,expiry1,sampled1,counter1)@i
+     & AuthorizationAccepted(sys,session,event2,null2,cred2,dev2,att2,
+                            issued2,expiry2,sampled2,counter2)@j
+     ==> #i = #j"
+
+lemma event_id_single_use:
+  "All sys session1 session2 eventId null1 null2 cred1 cred2
+       dev1 dev2 att1 att2 issued1 issued2 expiry1 expiry2
+       sampled1 sampled2 counter1 counter2 #i #j.
+     AuthorizationAccepted(sys,session1,eventId,null1,cred1,dev1,att1,
+                           issued1,expiry1,sampled1,counter1)@i
+     & AuthorizationAccepted(sys,session2,eventId,null2,cred2,dev2,att2,
+                            issued2,expiry2,sampled2,counter2)@j
+     ==> #i = #j"
+
+lemma nullifier_single_use:
+  "All sys session1 session2 event1 event2 nullifier cred1 cred2
+       dev1 dev2 att1 att2 issued1 issued2 expiry1 expiry2
+       sampled1 sampled2 counter1 counter2 #i #j.
+     AuthorizationAccepted(sys,session1,event1,nullifier,cred1,dev1,att1,
+                           issued1,expiry1,sampled1,counter1)@i
+     & AuthorizationAccepted(sys,session2,event2,nullifier,cred2,dev2,att2,
+                            issued2,expiry2,sampled2,counter2)@j
+     ==> #i = #j"
+
+end

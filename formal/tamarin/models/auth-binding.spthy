@@ -1,0 +1,242 @@
+theory IOTJ_V2_Auth_Binding
+begin
+
+builtins: signing, hashing
+functions: authctx/9, eventid/4, devicebind/3, payerintent/7
+
+/*
+  Implementation-aligned abstraction:
+    - authctx represents ProtocolV2Crypto.contextHash and intentionally does not
+      contain eventId (avoiding a circular definition);
+    - eventid(sys,session,ctx,nullifier) represents ProtocolV2Crypto.eventId;
+    - devicebind(ctx,session,nullifier) is only the MEA account signature;
+    - ValidZKProof is an ideal verification capability created by possession of
+      the registered credential secret. Its use is conditional on Groth16
+      knowledge soundness; it is deliberately independent of deviceSk;
+    - payerintent binds sys/domain, authctx, payer, provider, token, amount,
+      and expiry, matching the EIP-712 PayerIntent. It intentionally excludes
+      eventId/nullifier; those are covered by derived-event and proof bindings.
+  zkKeyCommit symbolically carries the registered ZK-key commitment that is
+  bound through the credential record and authctx. H_out is a separate,
+  per-measurement public output and is outside this credential-secret submodel.
+  The implementation has no separate payee field:
+  provider is repeated in the payee position below to make that alias explicit.
+  There is no independent authorizationId in the implementation: the derived
+  eventId is the authorization-record key.
+*/
+
+rule Bootstrap:
+  [ Fr(~sys), Fr(~deviceSk), Fr(~payerSk), Fr(~policyDigest),
+    Fr(~provider), Fr(~pid), Fr(~pv), Fr(~center), Fr(~radius),
+    Fr(~minEnergy), Fr(~maxEnergy), Fr(~rate), Fr(~token),
+    Fr(~credentialSecret) ]
+  --[ PolicyPublished(~sys,~policyDigest,~provider,~pid,~pv,~center,
+                      ~radius,~minEnergy,~maxEnergy,~rate,~token,~provider),
+      CredentialRegistered(~sys,pk(~deviceSk),h(~credentialSecret)) ]->
+  [ !Device(~sys,pk(~deviceSk),pk(~payerSk),~deviceSk),
+    !Credential(~sys,pk(~deviceSk),h(~credentialSecret),~credentialSecret),
+    !Payer(~sys,pk(~payerSk),~payerSk),
+    !Policy(~sys,~policyDigest,~provider,~pid,~pv,~center,~radius,
+            ~minEnergy,~maxEnergy,~rate,~token,~provider),
+    Out(<pk(~deviceSk),pk(~payerSk),~policyDigest,~provider,~pid,~pv,
+         ~center,~radius,~minEnergy,~maxEnergy,~rate,~token,~provider,
+         h(~credentialSecret)>) ]
+
+rule Corrupt_Device:
+  [ !Device(sys,device,payer,deviceSk) ]
+  --[ DeviceCorrupted(sys,device) ]->
+  [ Out(deviceSk) ]
+
+rule Corrupt_Credential:
+  [ !Credential(sys,device,zkKeyCommit,credentialSecret) ]
+  --[ CredentialCorrupted(sys,device,zkKeyCommit) ]->
+  [ Out(<sys,device,zkKeyCommit,credentialSecret>) ]
+
+rule Corrupt_Payer:
+  [ !Payer(sys,payer,payerSk) ]
+  --[ PayerCorrupted(sys,payer) ]->
+  [ Out(payerSk) ]
+
+rule Forge_ZK_After_Credential_Corruption:
+  [ In(<sys,device,zkKeyCommit,credentialSecret,context,eventId,
+        session,nullifier>),
+    !Credential(sys,device,zkKeyCommit,credentialSecret) ]
+  --[ CompromisedZKProofCreated(sys,context,eventId,device,zkKeyCommit,
+                               session,nullifier),
+      ZKProofCreated(sys,context,eventId,device,zkKeyCommit,
+                     session,nullifier) ]->
+  [ !ValidZKProof(sys,context,eventId,device,zkKeyCommit,session,nullifier) ]
+
+rule Device_Prepare:
+  let context = authctx(sys,device,payer,policyDigest,~amount,~session,
+                        ~issuedAt,~expiry,zkKeyCommit)
+      eventId = eventid(sys,~session,context,~nullifier)
+      deviceMessage = devicebind(context,~session,~nullifier)
+  in
+  [ !Device(sys,device,payer,deviceSk),
+    !Policy(sys,policyDigest,provider,pid,pv,center,radius,
+            minEnergy,maxEnergy,rate,token,payee),
+    Fr(~amount), Fr(~session), Fr(~nullifier),
+    Fr(~issuedAt), Fr(~expiry),
+    !Credential(sys,device,zkKeyCommit,credentialSecret) ]
+  --[ DevicePrepared(sys,context,eventId,device,payer,policyDigest,
+                     ~amount,~session,~nullifier,~issuedAt,~expiry,
+                     zkKeyCommit),
+      HonestZKProofCreated(sys,context,eventId,device,zkKeyCommit,
+                           ~session,~nullifier),
+      ZKProofCreated(sys,context,eventId,device,zkKeyCommit,
+                     ~session,~nullifier) ]->
+  [ UnusedAuthorization(sys,eventId),
+    !ValidZKProof(sys,context,eventId,device,zkKeyCommit,~session,~nullifier),
+    Out(<context,eventId,device,payer,policyDigest,~amount,~session,
+         ~nullifier,~issuedAt,~expiry,zkKeyCommit,
+         sign(deviceMessage,deviceSk)>) ]
+
+rule Payer_Approve:
+  let context = authctx(sys,device,payer,policyDigest,amount,session,
+                        issuedAt,expiry,zkKeyCommit)
+      eventId = eventid(sys,session,context,nullifier)
+      deviceMessage = devicebind(context,session,nullifier)
+      intent = payerintent(sys,context,payer,provider,token,amount,expiry)
+  in
+  [ In(<context,eventId,device,payer,policyDigest,amount,session,
+        nullifier,issuedAt,expiry,zkKeyCommit,
+        sign(deviceMessage,deviceSk)>),
+    !Device(sys,device,payer,deviceSk),
+    !Payer(sys,payer,payerSk),
+    !Policy(sys,policyDigest,provider,pid,pv,center,radius,
+            minEnergy,maxEnergy,rate,token,payee) ]
+  --[ PayerApproved(sys,context,payer,provider,token,payee,amount,expiry) ]->
+  [ Out(<context,eventId,device,payer,policyDigest,amount,session,
+         nullifier,issuedAt,expiry,zkKeyCommit,
+         sign(deviceMessage,deviceSk),sign(intent,payerSk)>) ]
+
+rule Ledger_Accept:
+  let context = authctx(sys,device,payer,policyDigest,amount,session,
+                        issuedAt,expiry,zkKeyCommit)
+      eventId = eventid(sys,session,context,nullifier)
+      deviceMessage = devicebind(context,session,nullifier)
+      intent = payerintent(sys,context,payer,provider,token,amount,expiry)
+  in
+  [ In(<context,eventId,device,payer,policyDigest,amount,session,
+        nullifier,issuedAt,expiry,zkKeyCommit,
+        sign(deviceMessage,deviceSk),sign(intent,payerSk)>),
+    !Device(sys,device,payer,deviceSk),
+    !Payer(sys,payer,payerSk),
+    !Policy(sys,policyDigest,provider,pid,pv,center,radius,
+            minEnergy,maxEnergy,rate,token,payee),
+    !ValidZKProof(sys,context,eventId,device,zkKeyCommit,session,nullifier),
+    UnusedAuthorization(sys,eventId) ]
+  --[ AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                            provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                            rate,token,payee,amount,session,nullifier,
+                            issuedAt,expiry,zkKeyCommit) ]->
+  [ AcceptedAuthorization(sys,eventId,context,session,nullifier) ]
+
+lemma executable_authorization:
+  exists-trace
+  "Ex sys context eventId device payer policyDigest provider pid pv center
+      radius minEnergy maxEnergy rate token payee amount session nullifier
+      issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i"
+
+lemma derived_event_identifier:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> eventId = eventid(sys,session,context,nullifier)"
+
+lemma device_control_binding:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> (Ex #p. DevicePrepared(sys,context,eventId,device,payer,policyDigest,
+                               amount,session,nullifier,issuedAt,expiry,
+                               zkKeyCommit)@p & #p < #i)
+       | (Ex #c. DeviceCorrupted(sys,device)@c & #c < #i)"
+
+lemma credential_secret_possession_binding:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> (Ex #p. HonestZKProofCreated(sys,context,eventId,device,zkKeyCommit,
+                                     session,nullifier)@p & #p < #i)
+       | (Ex #c. CredentialCorrupted(sys,device,zkKeyCommit)@c & #c < #i)"
+
+lemma zk_verification_capability_origin:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> (Ex #p. ZKProofCreated(sys,context,eventId,device,zkKeyCommit,
+                               session,nullifier)@p & #p < #i)"
+
+lemma accepted_uses_registered_credential:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> (Ex #r. CredentialRegistered(sys,device,zkKeyCommit)@r & #r < #i)"
+
+lemma payer_account_binding:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> (Ex #p. PayerApproved(sys,context,payer,provider,token,payee,
+                              amount,expiry)@p & #p < #i)
+       | (Ex #c. PayerCorrupted(sys,payer)@c & #c < #i)"
+
+lemma exact_policy_binding:
+  "All sys context eventId device payer policyDigest provider pid pv center
+       radius minEnergy maxEnergy rate token payee amount session nullifier
+       issuedAt expiry zkKeyCommit #i.
+     AuthorizationAccepted(sys,context,eventId,device,payer,policyDigest,
+                           provider,pid,pv,center,radius,minEnergy,maxEnergy,
+                           rate,token,payee,amount,session,nullifier,
+                           issuedAt,expiry,zkKeyCommit)@i
+     ==> (Ex #p. PolicyPublished(sys,policyDigest,provider,pid,pv,center,
+                                radius,minEnergy,maxEnergy,rate,token,payee)@p
+                   & #p < #i)"
+
+lemma authorization_event_single_use:
+  "All sys context1 context2 eventId device1 device2 payer1 payer2 pd1 pd2
+       provider1 provider2 pid1 pid2 pv1 pv2 center1 center2 radius1 radius2
+       min1 min2 max1 max2 rate1 rate2 token1 token2 payee1 payee2
+       amount1 amount2 session1 session2 null1 null2 issued1 issued2
+       expiry1 expiry2 proof1 proof2 #i #j.
+     AuthorizationAccepted(sys,context1,eventId,device1,payer1,pd1,
+                           provider1,pid1,pv1,center1,radius1,min1,max1,
+                           rate1,token1,payee1,amount1,session1,null1,
+                           issued1,expiry1,proof1)@i
+     & AuthorizationAccepted(sys,context2,eventId,device2,payer2,pd2,
+                            provider2,pid2,pv2,center2,radius2,min2,max2,
+                            rate2,token2,payee2,amount2,session2,null2,
+                            issued2,expiry2,proof2)@j
+     ==> #i = #j"
+
+end

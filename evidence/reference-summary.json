@@ -1,0 +1,26 @@
+{
+  "status": "ALL_EXPECTATIONS_MET",
+  "verificationDate": "2026-10-10",
+  "referenceEvidence": "fresh standalone runs on the multi-core instance",
+  "proverif": {
+    "runId": "proverif-20261010T083615Z",
+    "version": "2.05",
+    "positiveSecuritySecrecyTrue": 27,
+    "honestReachabilityChecks": 2,
+    "namedNegativeControlsFalsified": 4,
+    "allExpectedQueryResults": 41
+  },
+  "tamarin": {
+    "runId": "20261010T083615Z",
+    "version": "1.12.0",
+    "maudeVersion": "3.5.1",
+    "positiveLemmasVerified": 34,
+    "includesPositiveExecutabilityLemmas": 5,
+    "negativeControlSecurityLemmasFalsified": 2,
+    "negativeControlExecutabilityLemmasVerified": 2
+  },
+  "modelCount": 15,
+  "sourceAndEvidenceManifests": "verified",
+  "publicationScan": "passed",
+  "legacyOrIncompleteRunsIncluded": false
+}

@@ -1,0 +1,67 @@
+(* EXPECTED-FAILING MUTANT: authorization accepts an otherwise valid request
+   without enforcing the MEA/EVM transaction origin. The explicit deviceSig
+   below abstracts the EVM transaction signature that determines msg.sender;
+   it is deliberately ignored by MutantVerifier.
+
+   Implementation guard restored in Protocol v2:
+   EnergyServiceAuthorizationV2.authorize requires msg.sender == session.mea.
+
+   Expected result: AuthorizationAccepted ==> DeviceOriginAuthorized is false.
+   The attacker replays the same attestor/payer/proof material while claiming a
+   non-MEA caller, directly exposing the missing msg.sender equality. *)
+
+set ignoreTypes = false.
+set abbreviateDerivation = true.
+
+type skey.
+type pkey.
+free net:channel.
+free publicStatement:bitstring.
+free attackerCaller:pkey.
+free skDevice,skPayer,skAttestor:skey [private].
+const ok:bitstring.
+
+fun pk(skey):pkey.
+fun sign(bitstring,skey):bitstring.
+fun checksign(bitstring,pkey):bitstring
+reduc forall m:bitstring,k:skey; checksign(sign(m,k),pk(k)) = m.
+(* Private constructor prevents the attacker from manufacturing a different
+   proof in this focused caller-binding mutant; replay remains possible. *)
+fun zkProof(bitstring,bitstring):bitstring [private].
+fun verifyZk(bitstring,bitstring):bitstring
+reduc forall witness,statement:bitstring;
+  verifyZk(zkProof(witness,statement),statement) = ok.
+fun envelope(bitstring):bitstring [data].
+fun payerIntent(bitstring):bitstring [data].
+fun txDigest(bitstring,bitstring,bitstring):bitstring [data].
+
+event DeviceOriginAuthorized(pkey,bitstring).
+event AuthorizationAccepted(pkey,bitstring).
+
+query caller:pkey,t:bitstring;
+  event(AuthorizationAccepted(caller,t))
+  ==> event(DeviceOriginAuthorized(caller,t)).
+
+let MutantVerifier() =
+  !in(net,(claimedCaller:pkey,env:bitstring,attSig:bitstring,
+           intent:bitstring,payerSig:bitstring,
+           zkp:bitstring,deviceSigIgnored:bitstring));
+   let (=env) = checksign(attSig,pk(skAttestor)) in
+   let (=intent) = checksign(payerSig,pk(skPayer)) in
+   let (=ok) = verifyZk(zkp,publicStatement) in
+   let txd = txDigest(env,intent,zkp) in
+   (* Mutation: no check that claimedCaller = pk(skDevice), and no check of
+      deviceSigIgnored / transaction msg.sender. *)
+   event AuthorizationAccepted(claimedCaller,txd).
+
+process
+  new sample:bitstring;
+  new honestWitness:bitstring;
+  let env = envelope(sample) in
+  let intent = payerIntent(sample) in
+  let zkp = zkProof(honestWitness,publicStatement) in
+  let txd = txDigest(env,intent,zkp) in
+  event DeviceOriginAuthorized(pk(skDevice),txd);
+  out(net,(pk(skDevice),env,sign(env,skAttestor),intent,sign(intent,skPayer),
+           zkp,sign(txd,skDevice)));
+  MutantVerifier()
